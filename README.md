@@ -72,6 +72,7 @@ python -m pytest -q tests
 - The 300 metre rule is a simple distance check. It does not know about headways or the timetable.
 - The record started in November 2026. Until several weeks are in, the typical-day chart is provisional and the page says so.
 - The gap estimate assumes vehicles keep the route's current pace. It is not an arrival prediction.
+- Gaps are measured on the longest branch in each direction. On routes with short-turn branches, the outer end of the line can show a gap that is really just the less frequent branch.
 - Near me judges direction from each vehicle's compass heading, which is unreliable when a vehicle is turning or stopped.
 - Subway trains are not in this feed.
 
