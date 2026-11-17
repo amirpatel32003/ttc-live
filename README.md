@@ -71,7 +71,7 @@ python -m pytest -q tests
 
 ## Data
 
-Vehicle positions come from the TTC's public real-time feed (the UmoIQ, formerly NextBus, API). Data copyright Toronto Transit Commission. Map tiles from OpenStreetMap contributors and CARTO. The map library is Leaflet. This project is not affiliated with the TTC.
+Vehicle positions come from the TTC's public real-time feed (the UmoIQ, formerly NextBus, API). Data copyright Toronto Transit Commission. Map tiles from OpenStreetMap contributors. The map library is Leaflet. This project is not affiliated with the TTC.
 
 ## Author
 

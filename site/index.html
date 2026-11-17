@@ -68,6 +68,8 @@ footer { color: var(--muted); font-size: 13.5px; margin-top: 26px; }
 footer li { margin: 4px 0; }
 .leaflet-container { font: inherit; background: var(--wash); }
 .leaflet-tooltip { font-size: 12.5px; }
+.leaflet-tile-pane { filter: grayscale(.75) contrast(.92) brightness(1.04); }
+@media (prefers-color-scheme: dark) { .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) grayscale(.6) brightness(.85) contrast(.9); } }
 #err { color: var(--red-ink); font-size: 13px; }
 
 /* shared project bar, the same on every one of these tools */
@@ -160,7 +162,7 @@ footer li { margin: 4px 0; }
       <li><a href="data/history.json">history.json</a>: the hourly profile the chart uses.</li>
     </ul>
     <p id="built"></p>
-    <p>Built by <a href="https://amirpatel32003.github.io/">Amir Patel</a>. Code and tests on <a href="https://github.com/amirpatel32003/ttc-live">GitHub</a>. Vehicle data &copy; Toronto Transit Commission, from its public real-time feed. Map tiles &copy; OpenStreetMap contributors and CARTO. This is an independent project and is not affiliated with the TTC.</p>
+    <p>Built by <a href="https://amirpatel32003.github.io/">Amir Patel</a>. Code and tests on <a href="https://github.com/amirpatel32003/ttc-live">GitHub</a>. Vehicle data &copy; Toronto Transit Commission, from its public real-time feed. Map &copy; OpenStreetMap contributors. This is an independent project and is not affiliated with the TTC.</p>
   </footer>
 </div>
 
@@ -211,9 +213,8 @@ const stateText = { bunched: "Bunched", moving: "Moving", stopped: "Stopped" };
 
 function initMap() {
   map = L.map("map", { preferCanvas: true, zoomControl: true, attributionControl: true }).setView([43.70, -79.40], 11);
-  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-  L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`, {
-    maxZoom: 18, subdomains: "abcd", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' }).addTo(map);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map);
   pathLayer = L.layerGroup().addTo(map);
   layer = L.layerGroup().addTo(map);
 }
@@ -238,7 +239,7 @@ async function drawPath() {
     const rc = await fetch(`${FEED}?command=routeConfig&a=ttc&r=${encodeURIComponent(want)}&terse`).then(r => r.json());
     if (want !== selected || !rc.route) return;
     const lines = list(rc.route.path).map(p => list(p.point).map(q => [+q.lat, +q.lon]));
-    L.polyline(lines, { color: css("--fg"), weight: 3, opacity: .45 }).addTo(pathLayer);
+    L.polyline(lines, { color: css("--red"), weight: 3, opacity: .55 }).addTo(pathLayer);
     map.fitBounds([[+rc.route.latMin, +rc.route.lonMin], [+rc.route.latMax, +rc.route.lonMax]], { padding: [20, 20] });
   } catch (e) {
     const pts = vehicles.filter(v => v.route === want).map(v => [v.lat, v.lon]);
