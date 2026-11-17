@@ -4,6 +4,8 @@
 
 Every TTC bus and streetcar on a map, refreshed every 15 seconds. Pick a route to see how fast it is moving, which vehicles are running in bunches, and how that compares with the route's usual day.
 
+For the route you pick, it also shows where the longest gap between vehicles is in each direction and roughly how long that wait is. A Near me button lists the vehicles within a kilometre of you and whether each is heading your way.
+
 This is the real-time half of a two-part look at TTC reliability. The other half is the [subway delay pipeline and dashboard](https://github.com/amirpatel32003/ttc-delay-pipeline), which works from the City's published history.
 
 [![CI](https://github.com/amirpatel32003/ttc-live/actions/workflows/ci.yml/badge.svg)](https://github.com/amirpatel32003/ttc-live/actions/workflows/ci.yml)
@@ -45,6 +47,8 @@ TTC vehicle feed (JSON, about 950 vehicles)
 
 **The aggregate stores sums and counts, not averages.** An hour usually arrives in two pieces because runs do not line up with the clock. Sums can be added; averages cannot. Loading the same file twice replaces its hours instead of doubling them, and there is a test for that.
 
+**Gaps are measured along the route, not as the crow flies.** Each vehicle is projected onto the line through the route's stops, which gives its distance from the start. The longest stretch between neighbours is the gap. Vehicle direction tags in the feed do not always match the route's own list, so both are reduced to the 0 or 1 in the middle of the tag. Vehicles more than 400 metres off the line, such as replacement buses on a detour, are left out and counted separately. The wait is that distance over the route's current pace, and the page calls it an estimate.
+
 **Speed means moving speed.** Averages leave out stopped vehicles, and the stopped share is reported next to it. Mixing the two would make a route with long terminal layovers look slow.
 
 **Hours are Toronto hours.** The local date and hour are fixed when the row is written, so nothing downstream has to know about time zones.
@@ -67,6 +71,8 @@ python -m pytest -q tests
 - Speed is what each vehicle reported at one instant. It is not a trip time.
 - The 300 metre rule is a simple distance check. It does not know about headways or the timetable.
 - The record started in November 2026. Until several weeks are in, the typical-day chart is provisional and the page says so.
+- The gap estimate assumes vehicles keep the route's current pace. It is not an arrival prediction.
+- Near me judges direction from each vehicle's compass heading, which is unreliable when a vehicle is turning or stopped.
 - Subway trains are not in this feed.
 
 ## Data

@@ -61,6 +61,12 @@ tbody tr:hover { background: var(--wash); }
 tbody tr.sel { background: var(--wash); box-shadow: inset 3px 0 0 var(--red); }
 .chartbox { position: relative; }
 svg.chart { display: block; width: 100%; height: auto; overflow: visible; }
+.gapdir { margin: 14px 0 4px; }
+.gapdir h3 { font: 600 14.5px/1.3 var(--font-sans); margin: 0 0 2px; }
+.gapdir p { margin: 0 0 6px; }
+.flag { display: inline-block; font-size: 12.5px; font-weight: 600; border-radius: 999px; padding: 2px 9px; margin-right: 6px; background: var(--wash); color: var(--fg); }
+.flag.long { background: var(--red); color: #fff; }
+@media (prefers-color-scheme: dark) { .flag.long { color: #1a1a18; } }
 .tip { position: absolute; pointer-events: none; background: var(--fg); color: var(--bg); border-radius: 7px; padding: 7px 9px; font-size: 12.5px; line-height: 1.35; white-space: nowrap; transform: translate(-50%, -100%); margin-top: -10px; opacity: 0; z-index: 5; }
 .tip.on { opacity: 1; }
 section { margin-top: 22px; }
@@ -95,11 +101,12 @@ footer li { margin: 4px 0; }
   <header class="hero">
     <div class="kick">TTC buses and streetcars, right now</div>
     <h1 id="headline">Loading the live feed…</h1>
-    <p class="herosub">Every vehicle the TTC has in service, refreshed every 15 seconds. Pick a route to see how fast it is moving, whether its vehicles are running in bunches, and how that compares with its usual day.</p>
+    <p class="herosub">Every vehicle the TTC has in service, refreshed every 15 seconds. Pick a route to see how fast it is moving, where the long gaps between vehicles are, and how that compares with its usual day. Or tap Near me for what is around you.</p>
   </header>
 
   <div class="bar">
     <label>Route <select id="route" aria-label="Route"></select></label>
+    <button class="btn" id="near" type="button" aria-pressed="false">Near me</button>
     <button class="btn" id="pause" type="button" aria-pressed="false">Pause updates</button>
     <span class="live" role="status"><span class="pulse" id="pulse"></span><span id="status">Connecting</span></span>
     <span id="err" role="alert"></span>
@@ -127,6 +134,21 @@ footer li { margin: 4px 0; }
     </div>
   </div>
 
+  <section class="panel" id="near-box" hidden>
+    <h2>Near you right now</h2>
+    <p class="sub" id="near-sub"></p>
+    <div style="max-height:340px;overflow:auto">
+      <table id="near-table"><thead><tr><th>Route</th><th class="num">Distance</th><th>Doing</th><th>Direction</th></tr></thead><tbody></tbody></table>
+    </div>
+    <p class="sub" style="margin:10px 0 0">Your location stays in your browser. It is not sent to me or stored.</p>
+  </section>
+
+  <section class="panel" id="gap-box">
+    <h2 id="gap-title">Where are the gaps?</h2>
+    <p class="sub" id="gap-sub">Pick a route to see how its vehicles are spaced along the line, and where the longest wait is building.</p>
+    <div id="gaps"></div>
+  </section>
+
   <section class="panel">
     <h2 id="rank-title">Routes right now</h2>
     <p class="sub">Routes with at least three vehicles out. Click a row to follow that route on the map.</p>
@@ -153,6 +175,8 @@ footer li { margin: 4px 0; }
       <li><b>Live map.</b> Your browser asks the TTC's public vehicle feed for positions every 15 seconds. Nothing on the map passes through a server of mine.</li>
       <li><b>Speed</b> is the speed each vehicle reported at that instant, averaged over vehicles that were moving. It is lower than a timetable speed because it includes slowing for stops and lights.</li>
       <li><b>Bunched</b> means two vehicles on the same route and direction within 300 metres of each other, both moving. Vehicles parked together at a terminal are not counted. Bunching usually means a long gap somewhere else on the route.</li>
+      <li><b>Gaps.</b> For the route you pick, each vehicle is placed along the line by matching it to the route's stops. The longest stretch with no vehicle is the biggest gap. The wait shown is that distance divided by how fast the route is moving right now, so it is an estimate, not a prediction. Vehicles more than 400 metres off the line, such as replacement buses on a detour, are left out.</li>
+      <li><b>Near me</b> lists vehicles within one kilometre of you and whether each is heading your way, judged from its compass heading.</li>
       <li><b>A typical day</b> comes from a collector that records the feed every 30 seconds for most of each hour and rolls it up by route and hour. It started in November 2026, so early figures rest on few days and will settle as more are added.</li>
       <li>Subway trains are not in this feed. For those, see <a href="https://amirpatel32003.github.io/ttc-delay-pipeline/">the subway delay dashboard</a>.</li>
     </ul>
@@ -179,6 +203,8 @@ const list = v => v == null ? [] : Array.isArray(v) ? v : [v];
 
 let vehicles = [], routeNames = {}, hist = null, selected = "", sortBy = "bunch", paused = false, lastOk = 0, timer = null, fitted = false;
 let map, layer, pathLayer, markers = new Map();
+let me = null, meMarker = null, watchId = null;
+const cfgCache = {};
 
 function haversine(a, b) {
   const R = 6371000, p1 = a.lat * Math.PI / 180, p2 = b.lat * Math.PI / 180, dl = (b.lon - a.lon) * Math.PI / 180;
@@ -231,13 +257,120 @@ function drawMap() {
   });
   markers.forEach((m, id) => { if (!seen.has(id)) { layer.removeLayer(m); markers.delete(id); } });
 }
+/* Route geometry: one request per route, kept for the session. */
+function routeConfig(tag) {
+  if (!cfgCache[tag]) cfgCache[tag] = fetch(`${FEED}?command=routeConfig&a=ttc&r=${encodeURIComponent(tag)}`).then(r => r.json()).then(b => b.route || null).catch(() => { delete cfgCache[tag]; return null; });
+  return cfgCache[tag];
+}
+/* The feed's direction tags look like "504_1_504A". Vehicle tags do not always match the route's own list,
+   so both are reduced to the middle part: 0 or 1. */
+const dirKey = tag => { const m = /^[^_]+_([01])_/.exec(tag || ""); return m ? m[1] : null; };
+function buildLines(cfg) {
+  const stops = {}; list(cfg.stop).forEach(st => stops[st.tag] = { lat: +st.lat, lon: +st.lon, title: st.title });
+  const best = {};
+  list(cfg.direction).forEach(d => {
+    const k = dirKey(d.tag), pts = list(d.stop).map(x => stops[x.tag]).filter(Boolean);
+    if (k == null || pts.length < 2) return;
+    if (!best[k] || pts.length > best[k].pts.length) best[k] = { key: k, name: d.name || (k === "0" ? "Direction A" : "Direction B"), title: d.title || "", pts };
+  });
+  return Object.values(best).map(L0 => {
+    const lat0 = L0.pts[0].lat * Math.PI / 180, kx = 111320 * Math.cos(lat0), ky = 110540;
+    const xy = L0.pts.map(p => [(p.lon - L0.pts[0].lon) * kx, (p.lat - L0.pts[0].lat) * ky]), cum = [0];
+    for (let i = 1; i < xy.length; i++) cum.push(cum[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
+    return { ...L0, xy, cum, length: cum[cum.length - 1], toXY: v => [(v.lon - L0.pts[0].lon) * kx, (v.lat - L0.pts[0].lat) * ky] };
+  }).sort((a, b) => a.key.localeCompare(b.key));
+}
+/* Distance along the line for one vehicle, and how far off the line it is. */
+function project(line, v) {
+  const [px, py] = line.toXY(v); let bestD = Infinity, bestS = 0;
+  for (let i = 1; i < line.xy.length; i++) {
+    const [ax, ay] = line.xy[i - 1], [bx, by] = line.xy[i], dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    const t = len2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0, d = Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+    if (d < bestD) { bestD = d; bestS = line.cum[i - 1] + t * Math.sqrt(len2); }
+  }
+  return { s: bestS, off: bestD };
+}
+function stopNear(line, s) { let k = 0; for (let i = 1; i < line.cum.length; i++) if (Math.abs(line.cum[i] - s) < Math.abs(line.cum[k] - s)) k = i; return line.pts[k].title; }
+function analyseGaps(cfg, vs) {
+  const all = vs.filter(v => v.dir), meanSpeed = all.length ? all.reduce((a, v) => a + v.speed, 0) / all.length : 0, pace = Math.max(6, meanSpeed);   // km/h, counting stopped vehicles
+  return buildLines(cfg).map(line => {
+    const mine = all.filter(v => dirKey(v.dir) === line.key).map(v => ({ v, ...project(line, v) }));
+    const on = mine.filter(m => m.off <= 400).sort((a, b) => a.s - b.s), off = mine.length - on.length;
+    let big = null;
+    for (let i = 1; i < on.length; i++) { const g = on[i].s - on[i - 1].s; if (!big || g > big.m) big = { m: g, from: on[i - 1].s, to: on[i].s }; }
+    const spacing = on.length ? line.length / on.length : null;
+    if (big) { big.minutes = big.m / 1000 / pace * 60; big.ratio = spacing ? big.m / spacing : null; big.near = stopNear(line, (big.from + big.to) / 2); big.level = big.ratio >= 2 && big.minutes >= 6 ? "long" : big.ratio >= 1.5 && big.minutes >= 6 ? "uneven" : "even"; big.long = big.level === "long"; }
+    return { line, on, off, big, spacing, pace };
+  });
+}
+async function renderGaps() {
+  const box = $("#gaps");
+  if (!selected) { $("#gap-title").textContent = "Where are the gaps?"; $("#gap-sub").textContent = "Pick a route to see how its vehicles are spaced along the line, and where the longest wait is building."; box.innerHTML = ""; return; }
+  const want = selected, cfg = await routeConfig(want);
+  if (want !== selected) return;
+  $("#gap-title").textContent = `Gaps on the ${routeLabel(want)} right now`;
+  if (!cfg) { $("#gap-sub").textContent = "The route's stop list could not be loaded, so gaps cannot be worked out right now."; box.innerHTML = ""; return; }
+  const res = analyseGaps(cfg, vehicles.filter(v => v.route === want)).filter(r => r.on.length || r.off);
+  if (!res.length) { $("#gap-sub").textContent = "No vehicles on this route are reporting a direction right now."; box.innerHTML = ""; return; }
+  $("#gap-sub").textContent = "Each line is one direction, start to end. Dots are vehicles. The shaded stretch is the longest one with no vehicle in it.";
+  const W = Math.max(300, Math.round(box.clientWidth || 600)), H = 62, L = 10, R = 10, cols = { moving: css("--moving"), stopped: css("--stopped"), bunched: css("--bunched") };
+  box.innerHTML = res.map(r => {
+    const x = s => L + s / r.line.length * (W - L - R), b = r.big, first = r.line.pts[0].title, last = r.line.pts[r.line.pts.length - 1].title;
+    let svg = `<line x1="${L}" x2="${W - R}" y1="30" y2="30" stroke="${css("--axis")}" stroke-width="3" stroke-linecap="round"/>`;
+    if (b) svg += `<rect x="${x(b.from)}" y="20" width="${Math.max(2, x(b.to) - x(b.from))}" height="20" rx="4" fill="${css("--red")}" opacity="${b.long ? .28 : .13}"/><text x="${Math.min(W - 70, Math.max(70, (x(b.from) + x(b.to)) / 2))}" y="14" text-anchor="middle" font-size="12" font-weight="600" fill="${css("--fg")}">${(b.m / 1000).toFixed(1)} km gap</text>`;
+    r.on.forEach(m => svg += `<circle cx="${x(m.s).toFixed(1)}" cy="30" r="6" fill="${cols[stateOf(m.v)]}" stroke="${css("--panel")}" stroke-width="2"><title>Vehicle ${esc(m.v.id)}, ${stateText[stateOf(m.v)].toLowerCase()}, ${(m.s / 1000).toFixed(1)} km from the start</title></circle>`);
+    svg += `<text x="${L}" y="${H - 4}" font-size="11.5" fill="${css("--muted")}">${esc(first.length > 34 ? first.slice(0, 33) + "…" : first)}</text><text x="${W - R}" y="${H - 4}" text-anchor="end" font-size="11.5" fill="${css("--muted")}">${esc(last.length > 34 ? last.slice(0, 33) + "…" : last)}</text>`;
+    let text;
+    if (r.on.length < 2) text = r.on.length ? "Only one vehicle is on this line right now, so there is no gap to measure." : "No vehicles are on this line right now.";
+    else text = `<span class="flag ${b.long ? "long" : ""}">${{ long: "Long gap", uneven: "Uneven", even: "Even spacing" }[b.level]}</span>The longest stretch without a vehicle is <b>${(b.m / 1000).toFixed(1)} km</b>, around ${esc(b.near)}. At the route's current pace of ${r.pace.toFixed(0)} km/h that is roughly <b>${Math.max(1, Math.round(b.minutes))} minutes</b> between vehicles there` + (b.ratio ? `, ${b.ratio.toFixed(1)} times the average spacing of ${(r.spacing / 1000).toFixed(1)} km.` : ".");
+    if (r.off) text += ` ${r.off} vehicle${r.off === 1 ? " is" : "s are"} off this line (a branch, detour or replacement bus) and not counted.`;
+    return `<div class="gapdir"><h3>${esc(r.line.name)}bound: ${r.on.length} vehicle${r.on.length === 1 ? "" : "s"} over ${(r.line.length / 1000).toFixed(1)} km</h3><p>${text}</p><svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(r.line.name)}bound vehicles along the line">${svg}</svg></div>`;
+  }).join("");
+}
+
+/* ---------- near me ---------- */
+function bearing(a, b) { const y = Math.sin((b.lon - a.lon) * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180), x = Math.cos(a.lat * Math.PI / 180) * Math.sin(b.lat * Math.PI / 180) - Math.sin(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.cos((b.lon - a.lon) * Math.PI / 180); return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360; }
+function renderNear() {
+  const box = $("#near-box"); box.hidden = !me; if (!me) return;
+  const rows = vehicles.filter(v => v.dir).map(v => ({ v, d: haversine(me, v) })).filter(x => x.d <= 1000).sort((a, b) => a.d - b.d).slice(0, 25);
+  $("#near-sub").textContent = rows.length ? `${rows.length} vehicle${rows.length === 1 ? "" : "s"} within one kilometre of you. Click one to follow its route.` : "No vehicles within one kilometre of you right now.";
+  $("#near-table tbody").innerHTML = rows.map(({ v, d }) => {
+    let way = "Stopped";
+    if (v.speed > 0 && v.heading >= 0) { const diff = Math.abs(((bearing(v, me) - v.heading + 540) % 360) - 180); way = diff <= 60 ? "Heading your way" : diff >= 120 ? "Heading away" : "Passing by"; }
+    return `<tr data-r="${esc(v.route)}" tabindex="0"><td>${esc(routeLabel(v.route))}</td><td class="num">${d < 100 ? Math.round(d / 10) * 10 : Math.round(d / 50) * 50} m</td><td>${stateText[stateOf(v)]}${v.speed > 0 ? ", " + Math.round(v.speed) + " km/h" : ""}</td><td>${way}</td></tr>`;
+  }).join("");
+}
+function toggleNear() {
+  const btn = $("#near");
+  if (me || watchId != null) {
+    if (watchId != null) navigator.geolocation.clearWatch(watchId); watchId = null; me = null;
+    if (meMarker) { map.removeLayer(meMarker); meMarker = null; }
+    btn.setAttribute("aria-pressed", "false"); btn.textContent = "Near me"; renderNear(); return;
+  }
+  if (!navigator.geolocation) { $("#err").textContent = "This browser cannot share a location."; return; }
+  btn.textContent = "Finding you…";
+  let first = true;
+  watchId = navigator.geolocation.watchPosition(pos => {
+    me = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+    if (!meMarker) meMarker = L.circleMarker([me.lat, me.lon], { radius: 9, color: css("--fg"), weight: 3, fillColor: css("--panel"), fillOpacity: 1 }).bindTooltip("You are here").addTo(map);
+    else meMarker.setLatLng([me.lat, me.lon]);
+    btn.setAttribute("aria-pressed", "true"); btn.textContent = "Stop using my location"; $("#err").textContent = "";
+    if (first) { first = false; if (!selected) map.setView([me.lat, me.lon], 15); }
+    renderNear();
+  }, () => {
+    watchId = null; btn.setAttribute("aria-pressed", "false"); btn.textContent = "Near me";
+    $("#err").textContent = "Your location was not shared, so Near me is off. You can allow it in the browser's site settings.";
+  }, { enableHighAccuracy: true, maximumAge: 15000, timeout: 15000 });
+}
+
 async function drawPath() {
   pathLayer.clearLayers();
   if (!selected) { map.setView([43.70, -79.40], 11); return; }
   const want = selected;
   try {
-    const rc = await fetch(`${FEED}?command=routeConfig&a=ttc&r=${encodeURIComponent(want)}&terse`).then(r => r.json());
-    if (want !== selected || !rc.route) return;
+    const rc = { route: await routeConfig(want) };
+    if (want !== selected) return;
+    if (!rc.route) throw new Error("no route");
     const lines = list(rc.route.path).map(p => list(p.point).map(q => [+q.lat, +q.lon]));
     L.polyline(lines, { color: css("--red"), weight: 3, opacity: .55 }).addTo(pathLayer);
     map.fitBounds([[+rc.route.latMin, +rc.route.lonMin], [+rc.route.latMax, +rc.route.lonMax]], { padding: [20, 20] });
@@ -324,7 +457,7 @@ function renderHistory() {
   };
   el.onmouseleave = () => { tip.classList.remove("on"); xh.setAttribute("visibility", "hidden"); };
 }
-function renderAll() { drawMap(); renderPanel(); renderRank(); renderHistory(); }
+function renderAll() { drawMap(); renderPanel(); renderRank(); renderHistory(); renderGaps(); renderNear(); }
 
 function select(r) {
   selected = r === selected ? "" : r;
@@ -362,12 +495,15 @@ function clock() {
   const m = location.hash.match(/r=([^&]+)/); if (m) selected = decodeURIComponent(m[1]);
   initMap();
   $("#route").onchange = e => { selected = e.target.value === selected ? selected : ""; select(e.target.value); };
+  $("#near").onclick = toggleNear;
+  $("#near-table tbody").onclick = e => { const tr = e.target.closest("tr[data-r]"); if (tr && tr.dataset.r !== selected) select(tr.dataset.r); };
+  $("#near-table tbody").onkeydown = e => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-r]"); if (tr && tr.dataset.r !== selected) select(tr.dataset.r); } };
   $("#pause").onclick = e => { paused = !paused; e.target.setAttribute("aria-pressed", paused); e.target.textContent = paused ? "Resume updates" : "Pause updates"; clock(); if (!paused) tick(); };
   document.querySelectorAll(".tabs .btn").forEach(b => b.onclick = () => { sortBy = b.dataset.sort; renderRank(); });
   $("#rank tbody").onclick = e => { const tr = e.target.closest("tr[data-r]"); if (tr) { select(tr.dataset.r); $("#map").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" }); } };
   $("#rank tbody").onkeydown = e => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-r]"); if (tr) select(tr.dataset.r); } };
   document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
-  let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderHistory, 150); });
+  let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { renderHistory(); renderGaps(); }, 150); });
   fetch(`${FEED}?command=routeList&a=ttc`).then(r => r.json()).then(b => { list(b.route).forEach(r => routeNames[r.tag] = r.title); fillRoutes(); renderAll(); }).catch(() => {});
   fetch("data/history.json", { cache: "no-store" }).then(r => r.ok ? r.json() : null).then(h => {
     hist = h; renderAll();
