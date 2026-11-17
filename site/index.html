@@ -85,6 +85,13 @@ footer li { margin: 4px 0; }
 .apnav a:hover { background: #3a3934; }
 .apnav a[aria-current=page] { background: #ecebe6; color: #1f1e1b; }
 .apnav .sp { flex: 1; }
+
+.hours { display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; margin: 12px 0 4px; }
+.hours div { text-align: center; font-size: 10.5px; color: var(--muted); }
+.hours i { display: block; height: 30px; border-radius: 4px; background: var(--wash); margin-bottom: 3px; }
+.cmp td:first-child { color: var(--muted); }
+.cmp .win { font-weight: 600; }
+.note { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
 </style>
 </head>
 <body>
@@ -170,6 +177,33 @@ footer li { margin: 4px 0; }
     <p class="sub" id="hist-note" style="margin:10px 0 0"></p>
   </section>
 
+  <section class="panel" id="card-box">
+    <h2 id="card-title">Route report card</h2>
+    <p class="sub" id="card-sub"></p>
+    <div id="card"></div>
+  </section>
+
+  <section class="panel" id="when-box">
+    <h2 id="when-title">Best time to leave</h2>
+    <p class="sub" id="when-sub"></p>
+    <div id="when"></div>
+  </section>
+
+  <section class="panel" id="cmp-box">
+    <h2>Compare two routes</h2>
+    <p class="sub">The route you picked above, against any other. Uses the collected history, so it shows the usual pattern, not today.</p>
+    <label class="note" style="display:flex;gap:8px;align-items:center;margin:0 0 10px">Compare with <select id="route2" aria-label="Second route"></select></label>
+    <div id="cmp"></div>
+  </section>
+
+  <section class="panel" id="week-box">
+    <h2>Roughest routes this week</h2>
+    <p class="sub" id="week-sub"></p>
+    <div style="max-height:420px;overflow:auto">
+      <table id="week"><thead><tr><th>Route</th><th class="num">Bunched</th><th class="num">Moving speed</th><th class="num">Days of data</th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
   <footer>
     <h2>How to read this</h2>
     <ul>
@@ -179,6 +213,7 @@ footer li { margin: 4px 0; }
       <li><b>Gaps.</b> For the route you pick, each vehicle is placed along the line by matching it to the route's stops. The longest stretch with no vehicle is the biggest gap. The wait shown is that distance divided by how fast the route is moving right now, so it is an estimate, not a prediction. Vehicles more than 400 metres off the line, such as replacement buses on a detour, are left out.</li>
       <li><b>Near me</b> lists vehicles within one kilometre of you and whether each is heading your way, judged from its compass heading.</li>
       <li><b>A typical day</b> comes from a collector that records the feed every 30 seconds for most of each hour and rolls it up by route and hour. It started in November 2026, so early figures rest on few days and will settle as more are added.</li>
+      <li><b>Report card, best time to leave, compare and roughest routes</b> all come from the collected history, not the live feed. They show a route's usual pattern, not a prediction for today. Routes need a few hundred reports, and the weekly ranking needs three days of data, before they appear.</li>
       <li>Subway trains are not in this feed. For those, see <a href="https://amirpatel32003.github.io/ttc-delay-pipeline/">the subway delay dashboard</a>.</li>
     </ul>
     <h2>Use the data</h2>
@@ -468,7 +503,111 @@ function renderHistory() {
   };
   el.onmouseleave = () => { tip.classList.remove("on"); xh.setAttribute("visibility", "hidden"); };
 }
-function renderAll() { drawMap(); renderPanel(); renderRank(); renderHistory(); renderGaps(); renderNear(); }
+function renderAll() { drawMap(); renderPanel(); renderRank(); renderHistory(); renderGaps(); renderNear(); renderPlan(); }
+
+/* ---------- report card, best time, compare, weekly ---------- */
+let selected2 = "";
+const fmtHour = h => (h % 12 === 0 ? 12 : h % 12) + (h < 12 ? " am" : " pm");
+const MIN_HOUR_REPORTS = 60, MIN_ROUTE_REPORTS = 300;
+function histReady() { return hist && hist.coverage && hist.coverage.reports > 0; }
+function cityAvg() {
+  const rows = [...hist.city.weekday, ...hist.city.weekend].filter(h => h.speed != null && h.reports > 0);
+  const n = rows.reduce((a, h) => a + h.reports, 0); if (!n) return null;
+  return { speed: rows.reduce((a, h) => a + h.speed * h.reports, 0) / n, bunched: rows.filter(h => h.bunched != null).reduce((a, h) => a + h.bunched * h.reports, 0) / n };
+}
+function routeStats(r) {
+  const x = hist && hist.routes[r]; if (!x || x.reports < MIN_ROUTE_REPORTS) return null;
+  const hrs = x.hours.filter(h => h.reports >= MIN_HOUR_REPORTS && h.speed != null);
+  const bunchHrs = hrs.filter(h => h.bunched != null);
+  return { x, hrs, fastest: hrs.slice().sort((a, b) => b.speed - a.speed)[0], slowest: hrs.slice().sort((a, b) => a.speed - b.speed)[0],
+    worstBunch: bunchHrs.slice().sort((a, b) => b.bunched - a.bunched)[0], days: Math.max(0, ...x.hours.map(h => h.days)) };
+}
+function rankOf(r, key, high) {
+  const vals = Object.entries(hist.routes).filter(([, x]) => x.reports >= MIN_ROUTE_REPORTS && x[key] != null).map(([k, x]) => [k, x[key]]);
+  if (vals.length < 5) return null;
+  const mine = hist.routes[r][key], better = vals.filter(([, v]) => high ? v > mine : v < mine).length;
+  return { pos: better + 1, of: vals.length };
+}
+function collecting(el, sub, what) {
+  const d = histReady() ? hist.coverage.days : 0;
+  el.innerHTML = `<p class="note">Still collecting data. ${what} needs more history than the collector has so far (${d} day${d === 1 ? "" : "s"}).</p>`;
+  if (sub) sub.textContent = "";
+}
+function renderCard() {
+  const el = $("#card"), sub = $("#card-sub");
+  if (!selected) { $("#card-title").textContent = "Route report card"; sub.textContent = "Pick a route above to see how it usually runs."; el.innerHTML = ""; return; }
+  $("#card-title").textContent = `Report card: ${routeLabel(selected)}`;
+  const st = histReady() ? routeStats(selected) : null;
+  if (!st) { collecting(el, sub, "A report card for this route"); return; }
+  const c = cityAvg(), x = st.x;
+  const rs = rankOf(selected, "speed", true), rb = rankOf(selected, "bunched", false);
+  const vs = c && x.speed != null ? Math.round((x.speed / c.speed - 1) * 100) : null;
+  sub.textContent = `From ${x.reports.toLocaleString("en-CA")} vehicle reports over ${st.days} day${st.days === 1 ? "" : "s"}${st.days < 7 ? ", so treat it as provisional" : ""}.`;
+  const tile = (n, l) => `<div class="tile"><div class="num">${n}</div><div class="lab">${l}</div></div>`;
+  el.innerHTML = `<div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+    ${tile(x.speed == null ? "n/a" : x.speed.toFixed(1) + " km/h", vs == null ? "usual moving speed" : `usual moving speed, ${vs === 0 ? "same as" : Math.abs(vs) + "% " + (vs > 0 ? "faster than" : "slower than")} the TTC average`)}
+    ${tile(pct(x.bunched), c ? `of moving vehicles bunched, TTC average ${pct(c.bunched)}` : "of moving vehicles bunched")}
+    ${st.fastest ? tile(fmtHour(st.fastest.h), `fastest hour, ${st.fastest.speed.toFixed(1)} km/h`) : ""}
+    ${st.slowest ? tile(fmtHour(st.slowest.h), `slowest hour, ${st.slowest.speed.toFixed(1)} km/h`) : ""}
+    ${st.worstBunch ? tile(fmtHour(st.worstBunch.h), `most bunched hour, ${pct(st.worstBunch.bunched)}`) : ""}
+    ${x.peak_vehicles ? tile(x.peak_vehicles, "most vehicles seen out at once") : ""}
+  </div>
+  <p class="note">${[rs && `Speed ranks ${rs.pos} of ${rs.of} routes (1 is fastest).`, rb && `Bunching ranks ${rb.pos} of ${rb.of} (1 is the least bunched).`].filter(Boolean).join(" ")}</p>`;
+}
+function renderWhen() {
+  const el = $("#when"), sub = $("#when-sub");
+  if (!selected) { $("#when-title").textContent = "Best time to leave"; sub.textContent = "Pick a route above to see which hours usually run smoothest."; el.innerHTML = ""; return; }
+  $("#when-title").textContent = `Best time to leave: ${routeLabel(selected)}`;
+  const st = histReady() ? routeStats(selected) : null;
+  if (!st || st.hrs.length < 6) { collecting(el, sub, "Best-time advice for this route"); return; }
+  const ok = st.hrs.filter(h => h.bunched != null);
+  const calm = ok.slice().sort((a, b) => a.bunched - b.bunched || b.speed - a.speed).slice(0, 3).map(h => h.h).sort((a, b) => a - b);
+  const rough = ok.slice().sort((a, b) => b.bunched - a.bunched || a.speed - b.speed).slice(0, 3).map(h => h.h).sort((a, b) => a - b);
+  sub.textContent = "Hours are ranked by how often vehicles run bunched, then by speed. This is the usual pattern across all days collected, weekends included.";
+  const maxB = Math.max(0.01, ...ok.map(h => h.bunched)), byH = Object.fromEntries(ok.map(h => [h.h, h]));
+  const cells = Array.from({ length: 24 }, (_, h) => {
+    const r = byH[h]; const a = r ? 0.15 + 0.85 * (r.bunched / maxB) : 0;
+    return `<div title="${fmtHour(h)}: ${r ? pct(r.bunched) + " bunched, " + r.speed.toFixed(1) + " km/h" : "not enough data"}"><i style="${r ? `background:var(--bunched);opacity:${a.toFixed(2)}` : ""}"></i>${h % 3 === 0 ? fmtHour(h).replace(" ", "") : "&nbsp;"}</div>`;
+  }).join("");
+  el.innerHTML = `<p><b>Smoothest:</b> ${calm.map(fmtHour).join(", ")}<br><b>Roughest:</b> ${rough.map(fmtHour).join(", ")}</p>
+    <div class="hours" role="img" aria-label="Share of bunched vehicles by hour of day. Darker is more bunched.">${cells}</div>
+    <p class="note">Darker means more bunching. Hover a block for the hour's figures. Hours with too little data are left blank.</p>`;
+}
+function fillRoute2() {
+  if (!histReady()) return;
+  const tags = Object.keys(hist.routes).filter(r => hist.routes[r].reports >= MIN_ROUTE_REPORTS).sort((a, b) => (parseInt(a) || 9999) - (parseInt(b) || 9999) || a.localeCompare(b));
+  $("#route2").innerHTML = `<option value="">Choose a route</option>` + tags.map(t => `<option value="${esc(t)}">${esc(routeLabel(t))}</option>`).join("");
+  $("#route2").value = selected2;
+}
+function renderCompare() {
+  const el = $("#cmp");
+  if (!histReady()) { collecting(el, null, "Comparing routes"); return; }
+  if (!$("#route2").options.length || $("#route2").options.length < 2) fillRoute2();
+  if (!selected || !selected2) { el.innerHTML = `<p class="note">${!selected ? "Pick a route in the bar at the top, then choose a second one here." : "Choose a second route above."}</p>`; return; }
+  const a = routeStats(selected), b = routeStats(selected2);
+  if (!a || !b) { el.innerHTML = `<p class="note">${!a ? esc(routeLabel(selected)) : esc(routeLabel(selected2))} does not have enough history yet.</p>`; return; }
+  const num = (v, d) => v == null ? "n/a" : v.toFixed(d);
+  const rows = [
+    ["Usual moving speed", a.x.speed, b.x.speed, v => num(v, 1) + " km/h", true],
+    ["Vehicles bunched", a.x.bunched, b.x.bunched, pct, false],
+    ["Fastest hour", a.fastest && a.fastest.speed, b.fastest && b.fastest.speed, v => num(v, 1) + " km/h", true],
+    ["Slowest hour", a.slowest && a.slowest.speed, b.slowest && b.slowest.speed, v => num(v, 1) + " km/h", true],
+    ["Most vehicles out at once", a.x.peak_vehicles, b.x.peak_vehicles, v => v, true],
+  ];
+  el.innerHTML = `<table class="cmp"><thead><tr><th></th><th class="num">${esc(routeLabel(selected))}</th><th class="num">${esc(routeLabel(selected2))}</th></tr></thead><tbody>${rows.map(([l, x, y, f, high]) => {
+    const wa = x != null && y != null && x !== y && (high ? x > y : x < y), wb = x != null && y != null && x !== y && !wa;
+    return `<tr><td>${l}</td><td class="num ${wa ? "win" : ""}">${f(x)}</td><td class="num ${wb ? "win" : ""}">${f(y)}</td></tr>`;
+  }).join("")}</tbody></table><p class="note">Bold marks the better figure: faster, or less bunched. The number of vehicles out reflects how big the route is, not how good it is.</p>`;
+}
+function renderWeek() {
+  const tb = $("#week tbody"), sub = $("#week-sub"), d = histReady() ? hist.coverage.days : 0;
+  const rows = histReady() ? Object.entries(hist.routes).filter(([, x]) => x.week && x.week.reports >= MIN_ROUTE_REPORTS && x.week.bunched != null && x.week.days >= 2).map(([r, x]) => ({ r, ...x.week })) : [];
+  if (d < 3 || rows.length < 5) { sub.textContent = ""; tb.innerHTML = `<tr><td colspan="4">Still collecting data. This ranking needs at least three days of history and has ${d} so far.</td></tr>`; return; }
+  rows.sort((a, b) => b.bunched - a.bunched);
+  sub.textContent = "Routes ranked by the share of moving vehicles running bunched over the last seven days of collected data. Click a row to follow that route.";
+  tb.innerHTML = rows.slice(0, 15).map(x => `<tr data-r="${esc(x.r)}" tabindex="0"><td>${esc(routeLabel(x.r))}</td><td class="num">${pct(x.bunched)}</td><td class="num">${x.speed == null ? "n/a" : x.speed.toFixed(1) + " km/h"}</td><td class="num">${x.days}</td></tr>`).join("");
+}
+function renderPlan() { renderCard(); renderWhen(); renderCompare(); renderWeek(); }
 
 function select(r) {
   selected = r === selected ? "" : r;
@@ -507,6 +646,9 @@ function clock() {
   initMap();
   $("#route").onchange = e => { selected = e.target.value === selected ? selected : ""; select(e.target.value); };
   $("#near").onclick = toggleNear;
+  $("#route2").onchange = e => { selected2 = e.target.value; renderCompare(); };
+  $("#week tbody").onclick = e => { const tr = e.target.closest("tr[data-r]"); if (tr) { select(tr.dataset.r); $("#map").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" }); } };
+  $("#week tbody").onkeydown = e => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-r]"); if (tr) select(tr.dataset.r); } };
   $("#near-allow").onclick = toggleNear;
   if (navigator.permissions && navigator.permissions.query) navigator.permissions.query({ name: "geolocation" }).then(r => { if (r.state === "granted" && !me && watchId == null) toggleNear(); }).catch(() => {});
   $("#near-table tbody").onclick = e => { const tr = e.target.closest("tr[data-r]"); if (tr && tr.dataset.r !== selected) select(tr.dataset.r); };
@@ -519,7 +661,7 @@ function clock() {
   let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { renderHistory(); renderGaps(); }, 150); });
   fetch(`${FEED}?command=routeList&a=ttc`).then(r => r.json()).then(b => { list(b.route).forEach(r => routeNames[r.tag] = r.title); fillRoutes(); renderAll(); }).catch(() => {});
   fetch("data/history.json", { cache: "no-store" }).then(r => r.ok ? r.json() : null).then(h => {
-    hist = h; renderAll();
+    hist = h; fillRoute2(); renderAll();
     if (h) $("#built").textContent = `History last rebuilt ${new Date(h.generated_at).toLocaleString("en-CA", { dateStyle: "long", timeStyle: "short", timeZone: "America/Toronto" })} Toronto time.`;
   }).catch(() => {});
   await tick();

@@ -102,3 +102,19 @@ def test_history_reports_speed_of_moving_vehicles_and_bunching_share(run):
     assert hist["coverage"]["days"] == 1
     assert hist["coverage"]["first_report"].startswith("2026-11-16T21:5")
     json.dumps(hist)
+
+
+def test_history_route_week_covers_only_the_last_seven_days(tmp_path):
+    agg = tmp_path / "agg.parquet"
+    con = duckdb.connect()
+    con.execute("""
+        create table t (local_date varchar, local_hour int, route varchar, reports bigint, speed_sum double, moving_reports bigint,
+                        moving_speed_sum double, stopped_reports bigint, bunched_reports bigint, vehicles bigint, first_report timestamptz, last_report timestamptz)
+    """)
+    for d, speed in (("2026-11-01", 40.0), ("2026-11-14", 10.0), ("2026-11-16", 20.0)):
+        con.execute("insert into t values (?, 8, '504', 300, ?, 300, ?, 0, 30, 10, now(), now())", [d, speed * 300, speed * 300])
+    con.execute(f"copy t to '{agg.as_posix()}' (format parquet)")
+    wk = build_history(agg)["routes"]["504"]["week"]
+    assert wk["days"] == 2 and wk["reports"] == 600
+    assert wk["speed"] == pytest.approx(15.0, abs=0.1)
+    assert wk["bunched"] == pytest.approx(0.1, abs=0.001)

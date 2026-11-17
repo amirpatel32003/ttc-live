@@ -114,6 +114,17 @@ def build_history(agg_path: Path) -> dict:
         """).fetchall():
         routes[route] = {"speed": None if speed is None else round(speed, 1), "bunched": None if bunched is None else round(bunched, 4),
                          "reports": int(reports), "peak_vehicles": int(veh), "hours": by_hour("route = ?", [route])}
+    latest = con.execute("select max(local_date) from a").fetchone()[0]
+    if latest:
+        for route, speed, bunched, reports, days in con.execute(
+            """
+            select route, sum(moving_speed_sum) / nullif(sum(moving_reports), 0), sum(bunched_reports) * 1.0 / nullif(sum(moving_reports), 0),
+                   sum(reports), count(distinct local_date)
+            from a where cast(local_date as date) > cast(? as date) - 7 group by 1
+            """, [latest]).fetchall():
+            if route in routes:
+                routes[route]["week"] = {"speed": None if speed is None else round(speed, 1), "bunched": None if bunched is None else round(bunched, 4),
+                                         "reports": int(reports), "days": int(days)}
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "coverage": {
