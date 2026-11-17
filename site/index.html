@@ -191,7 +191,7 @@ footer li { margin: 4px 0; }
 
   <section class="panel" id="cmp-box">
     <h2>Compare two routes</h2>
-    <p class="sub">The route you picked above, against any other. Uses the collected history, so it shows the usual pattern, not today.</p>
+    <p class="sub">The route you picked above, against any other: how each is running right now, and how each usually runs once there is history for both.</p>
     <label class="note" style="display:flex;gap:8px;align-items:center;margin:0 0 10px">Compare with <select id="route2" aria-label="Second route"></select></label>
     <div id="cmp"></div>
   </section>
@@ -508,7 +508,7 @@ function renderAll() { drawMap(); renderPanel(); renderRank(); renderHistory(); 
 /* ---------- report card, best time, compare, weekly ---------- */
 let selected2 = "";
 const fmtHour = h => (h % 12 === 0 ? 12 : h % 12) + (h < 12 ? " am" : " pm");
-const MIN_HOUR_REPORTS = 60, MIN_ROUTE_REPORTS = 300;
+const MIN_HOUR_REPORTS = 20, MIN_ROUTE_REPORTS = 100;
 function histReady() { return hist && hist.coverage && hist.coverage.reports > 0; }
 function cityAvg() {
   const rows = [...hist.city.weekday, ...hist.city.weekend].filter(h => h.speed != null && h.reports > 0);
@@ -533,18 +533,29 @@ function collecting(el, sub, what) {
   el.innerHTML = `<p class="note">Still collecting data. ${what} needs more history than the collector has so far (${d} day${d === 1 ? "" : "s"}).</p>`;
   if (sub) sub.textContent = "";
 }
+function liveTiles(r) {
+  const x = summarise(vehicles.filter(v => v.route === r)), tile = (n, l) => `<div class="tile"><div class="num">${n}</div><div class="lab">${l}</div></div>`;
+  if (!x.n) return `<p class="note">No vehicles from this route are reporting right now. It may not run at this hour.</p>`;
+  return `<h3 style="font-size:14px;margin:4px 0 0">Right now</h3><div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+    ${tile(x.n, "vehicles in service")}${tile(x.speed == null ? "n/a" : x.speed.toFixed(1) + " km/h", "moving speed")}
+    ${tile(pct(x.stopped), "stopped")}${tile(x.bunchedN ? x.bunchedN + " (" + pct(x.bunched) + ")" : "0", "running bunched")}</div>`;
+}
 function renderCard() {
   const el = $("#card"), sub = $("#card-sub");
-  if (!selected) { $("#card-title").textContent = "Route report card"; sub.textContent = "Pick a route above to see how it usually runs."; el.innerHTML = ""; return; }
+  if (!selected) { $("#card-title").textContent = "Route report card"; sub.textContent = "Pick a route above to see how it is running now and how it usually runs."; el.innerHTML = ""; return; }
   $("#card-title").textContent = `Report card: ${routeLabel(selected)}`;
-  const st = histReady() ? routeStats(selected) : null;
-  if (!st) { collecting(el, sub, "A report card for this route"); return; }
+  const st = histReady() ? routeStats(selected) : null, live = liveTiles(selected);
+  if (!st) {
+    const d = histReady() ? hist.coverage.days : 0;
+    sub.textContent = "";
+    el.innerHTML = live + `<p class="note">The usual pattern for this route (fastest and slowest hours, bunching, how it ranks) appears once the collector has gathered enough reports for it. It has ${d} day${d === 1 ? "" : "s"} of history so far and adds an hour of data each hour.</p>`; return;
+  }
   const c = cityAvg(), x = st.x;
   const rs = rankOf(selected, "speed", true), rb = rankOf(selected, "bunched", false);
   const vs = c && x.speed != null ? Math.round((x.speed / c.speed - 1) * 100) : null;
-  sub.textContent = `From ${x.reports.toLocaleString("en-CA")} vehicle reports over ${st.days} day${st.days === 1 ? "" : "s"}${st.days < 7 ? ", so treat it as provisional" : ""}.`;
+  sub.textContent = `Usual pattern from ${x.reports.toLocaleString("en-CA")} vehicle reports over ${st.days} day${st.days === 1 ? "" : "s"}${st.days < 7 ? ", so treat it as provisional" : ""}.`;
   const tile = (n, l) => `<div class="tile"><div class="num">${n}</div><div class="lab">${l}</div></div>`;
-  el.innerHTML = `<div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+  el.innerHTML = live + `<h3 style="font-size:14px;margin:14px 0 0">Usually</h3><div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
     ${tile(x.speed == null ? "n/a" : x.speed.toFixed(1) + " km/h", vs == null ? "usual moving speed" : `usual moving speed, ${vs === 0 ? "same as" : Math.abs(vs) + "% " + (vs > 0 ? "faster than" : "slower than")} the TTC average`)}
     ${tile(pct(x.bunched), c ? `of moving vehicles bunched, TTC average ${pct(c.bunched)}` : "of moving vehicles bunched")}
     ${st.fastest ? tile(fmtHour(st.fastest.h), `fastest hour, ${st.fastest.speed.toFixed(1)} km/h`) : ""}
@@ -574,30 +585,37 @@ function renderWhen() {
     <p class="note">Darker means more bunching. Hover a block for the hour's figures. Hours with too little data are left blank.</p>`;
 }
 function fillRoute2() {
-  if (!histReady()) return;
-  const tags = Object.keys(hist.routes).filter(r => hist.routes[r].reports >= MIN_ROUTE_REPORTS).sort((a, b) => (parseInt(a) || 9999) - (parseInt(b) || 9999) || a.localeCompare(b));
-  $("#route2").innerHTML = `<option value="">Choose a route</option>` + tags.map(t => `<option value="${esc(t)}">${esc(routeLabel(t))}</option>`).join("");
-  $("#route2").value = selected2;
+  const opts = [...$("#route").options].filter(o => o.value);
+  if (!opts.length) return;
+  const cur = selected2;
+  $("#route2").innerHTML = `<option value="">Choose a route</option>` + opts.map(o => `<option value="${esc(o.value)}">${o.innerHTML}</option>`).join("");
+  $("#route2").value = cur;
 }
 function renderCompare() {
   const el = $("#cmp");
-  if (!histReady()) { collecting(el, null, "Comparing routes"); return; }
-  if (!$("#route2").options.length || $("#route2").options.length < 2) fillRoute2();
+  if ($("#route2").options.length < 2) fillRoute2();
   if (!selected || !selected2) { el.innerHTML = `<p class="note">${!selected ? "Pick a route in the bar at the top, then choose a second one here." : "Choose a second route above."}</p>`; return; }
-  const a = routeStats(selected), b = routeStats(selected2);
-  if (!a || !b) { el.innerHTML = `<p class="note">${!a ? esc(routeLabel(selected)) : esc(routeLabel(selected2))} does not have enough history yet.</p>`; return; }
-  const num = (v, d) => v == null ? "n/a" : v.toFixed(d);
-  const rows = [
-    ["Usual moving speed", a.x.speed, b.x.speed, v => num(v, 1) + " km/h", true],
-    ["Vehicles bunched", a.x.bunched, b.x.bunched, pct, false],
-    ["Fastest hour", a.fastest && a.fastest.speed, b.fastest && b.fastest.speed, v => num(v, 1) + " km/h", true],
-    ["Slowest hour", a.slowest && a.slowest.speed, b.slowest && b.slowest.speed, v => num(v, 1) + " km/h", true],
-    ["Most vehicles out at once", a.x.peak_vehicles, b.x.peak_vehicles, v => v, true],
-  ];
-  el.innerHTML = `<table class="cmp"><thead><tr><th></th><th class="num">${esc(routeLabel(selected))}</th><th class="num">${esc(routeLabel(selected2))}</th></tr></thead><tbody>${rows.map(([l, x, y, f, high]) => {
-    const wa = x != null && y != null && x !== y && (high ? x > y : x < y), wb = x != null && y != null && x !== y && !wa;
-    return `<tr><td>${l}</td><td class="num ${wa ? "win" : ""}">${f(x)}</td><td class="num ${wb ? "win" : ""}">${f(y)}</td></tr>`;
-  }).join("")}</tbody></table><p class="note">Bold marks the better figure: faster, or less bunched. The number of vehicles out reflects how big the route is, not how good it is.</p>`;
+  if (selected === selected2) { el.innerHTML = `<p class="note">Choose a different route to compare with.</p>`; return; }
+  const na = routeLabel(selected), nb = routeLabel(selected2), num = (v, d) => v == null ? "n/a" : v.toFixed(d);
+  const la = summarise(vehicles.filter(v => v.route === selected)), lb = summarise(vehicles.filter(v => v.route === selected2));
+  const row = (l, x, y, f, high) => { const ok = x != null && y != null && x !== y, wa = ok && (high ? x > y : x < y), wb = ok && !wa;
+    return `<tr><td>${l}</td><td class="num ${wa ? "win" : ""}">${x == null ? "n/a" : f(x)}</td><td class="num ${wb ? "win" : ""}">${y == null ? "n/a" : f(y)}</td></tr>`; };
+  const head = `<thead><tr><th></th><th class="num">${esc(na)}</th><th class="num">${esc(nb)}</th></tr></thead>`;
+  let html = `<table class="cmp">${head}<tbody><tr><td colspan="3"><b>Right now</b></td></tr>
+    ${row("Vehicles in service", la.n || null, lb.n || null, v => v, true)}
+    ${row("Moving speed", la.speed, lb.speed, v => num(v, 1) + " km/h", true)}
+    ${row("Stopped", la.stopped, lb.stopped, pct, false)}
+    ${row("Vehicles bunched", la.n ? la.bunched : null, lb.n ? lb.bunched : null, pct, false)}`;
+  const a = histReady() ? routeStats(selected) : null, b = histReady() ? routeStats(selected2) : null;
+  if (a && b) {
+    html += `<tr><td colspan="3"><b>Usually</b></td></tr>
+      ${row("Moving speed", a.x.speed, b.x.speed, v => num(v, 1) + " km/h", true)}
+      ${row("Vehicles bunched", a.x.bunched, b.x.bunched, pct, false)}
+      ${row("Fastest hour", a.fastest && a.fastest.speed, b.fastest && b.fastest.speed, v => num(v, 1) + " km/h", true)}
+      ${row("Slowest hour", a.slowest && a.slowest.speed, b.slowest && b.slowest.speed, v => num(v, 1) + " km/h", true)}`;
+  }
+  html += `</tbody></table><p class="note">Bold marks the better figure: faster, or less stopped or bunched. Vehicles in service reflects how big the route is, not how good it is.${a && b ? "" : " The usual-pattern comparison appears once both routes have enough collected history."}</p>`;
+  el.innerHTML = html;
 }
 function renderWeek() {
   const tb = $("#week tbody"), sub = $("#week-sub"), d = histReady() ? hist.coverage.days : 0;
@@ -624,6 +642,7 @@ function fillRoutes() {
   const cur = $("#route").value || selected;
   $("#route").innerHTML = `<option value="">All routes</option>` + tags.map(t => `<option value="${esc(t)}">${esc(routeLabel(t))}${live.has(t) ? "" : " (not running now)"}</option>`).join("");
   $("#route").value = cur;
+  fillRoute2();
 }
 async function tick() {
   if (paused || document.hidden) return;
@@ -661,7 +680,7 @@ function clock() {
   let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { renderHistory(); renderGaps(); }, 150); });
   fetch(`${FEED}?command=routeList&a=ttc`).then(r => r.json()).then(b => { list(b.route).forEach(r => routeNames[r.tag] = r.title); fillRoutes(); renderAll(); }).catch(() => {});
   fetch("data/history.json", { cache: "no-store" }).then(r => r.ok ? r.json() : null).then(h => {
-    hist = h; fillRoute2(); renderAll();
+    hist = h; renderAll();
     if (h) $("#built").textContent = `History last rebuilt ${new Date(h.generated_at).toLocaleString("en-CA", { dateStyle: "long", timeStyle: "short", timeZone: "America/Toronto" })} Toronto time.`;
   }).catch(() => {});
   await tick();

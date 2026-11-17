@@ -110,7 +110,7 @@ def build_history(agg_path: Path) -> dict:
         """
         select route, sum(moving_speed_sum) / nullif(sum(moving_reports), 0), sum(bunched_reports) * 1.0 / nullif(sum(moving_reports), 0),
                sum(reports), max(vehicles)
-        from a group by 1 having sum(reports) >= 200 order by 1
+        from a group by 1 having sum(reports) >= 100 order by 1
         """).fetchall():
         routes[route] = {"speed": None if speed is None else round(speed, 1), "bunched": None if bunched is None else round(bunched, 4),
                          "reports": int(reports), "peak_vehicles": int(veh), "hours": by_hour("route = ?", [route])}
