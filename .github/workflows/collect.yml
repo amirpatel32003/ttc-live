@@ -1,0 +1,94 @@
+name: Collect and publish
+# Scheduled runs record the live feed for most of an hour, add it to the route-hour table and republish.
+# A push only rebuilds the page from the table already stored, so code changes go live in a minute.
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Minutes to collect"
+        default: "50"
+  push:
+    branches: [main]
+    paths: ["site/**", "ttc_live/**", "requirements.txt", ".github/workflows/collect.yml"]
+permissions:
+  contents: write      # hourly Parquet files and the aggregate are stored as assets on the "data" release
+  pages: write
+  id-token: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    concurrency:
+      group: ${{ github.event_name == 'push' && 'rebuild' || 'collect' }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      COLLECT: ${{ github.event_name != 'push' }}
+      GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Make sure the data release exists
+        run: gh release view data >/dev/null 2>&1 || gh release create data --title "Collected data" --notes "Hourly Parquet files of vehicle positions (kept 7 days) and the route-hour aggregate. Written by the Collect and publish workflow."
+      - name: Record the feed
+        if: env.COLLECT == 'true'
+        run: python -m ttc_live.collect --minutes "${{ inputs.minutes || '50' }}" --every 30 --out data/raw
+      - name: Fetch the stored route-hour table (after collecting, so it is as fresh as possible)
+        run: |
+          mkdir -p data
+          gh release download data -p route_hour.parquet -D data --clobber || echo "no aggregate yet"
+      - name: Update the route-hour table and build the page data
+        run: python -m ttc_live.aggregate --raw data/raw --agg data/route_hour.parquet --site site/data
+      - name: Store the raw hour and the updated table
+        if: env.COLLECT == 'true'
+        run: |
+          gh release upload data data/raw/positions_*.parquet --clobber
+          gh release upload data data/route_hour.parquet --clobber
+      - name: Drop raw files older than 7 days
+        if: env.COLLECT == 'true'
+        run: |
+          cutoff=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          gh release view data --json assets --jq ".assets[] | select(.name | startswith(\"positions_\")) | select(.createdAt < \"$cutoff\") | .name" \
+            | while read -r name; do gh release delete-asset data "$name" -y; done
+      # BigQuery is optional. It switches on when the repository has a GCP_PROJECT variable and a GCP_SA_KEY secret.
+      - name: Sign in to Google Cloud
+        if: env.COLLECT == 'true' && env.GCP_PROJECT != ''
+        continue-on-error: true
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Set up the bq command
+        if: env.COLLECT == 'true' && env.GCP_PROJECT != ''
+        continue-on-error: true
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Load the raw hour into BigQuery
+        if: env.COLLECT == 'true' && env.GCP_PROJECT != ''
+        continue-on-error: true
+        run: |
+          bq --project_id "$GCP_PROJECT" mk --dataset --location northamerica-northeast2 ttc_live 2>/dev/null || true
+          for f in data/raw/positions_*.parquet; do
+            bq --project_id "$GCP_PROJECT" load --source_format PARQUET --time_partitioning_field reported_at --time_partitioning_type DAY \
+              --clustering_fields route ttc_live.positions "$f"
+          done
+          bq --project_id "$GCP_PROJECT" load --source_format PARQUET --replace ttc_live.route_hour data/route_hour.parquet
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

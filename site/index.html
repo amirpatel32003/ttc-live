@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TTC buses and streetcars, live: where they are and which routes are bunched</title>
+<meta name="description" content="A live map of every TTC bus and streetcar, refreshed every 15 seconds. Pick a route to see how fast it is moving, where vehicles are bunched, and how its speed changes through the day.">
+<meta property="og:title" content="TTC buses and streetcars, live">
+<meta property="og:description" content="Every TTC bus and streetcar on a map, refreshed every 15 seconds, with bunching and speed by route.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%23DA291C%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%276%27 fill=%27%23fff%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<script data-goatcounter="https://amirpatel32003.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+<style>
+:root { color-scheme: light dark;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; --font-serif: Georgia, "Times New Roman", serif;
+  --bg: #f4f4f2; --panel: #ffffff; --line: #e3e2dc; --fg: #1f1e1b; --muted: #6b6a63; --axis: #b9b8b0; --grid: #e8e7e1;
+  --red: #DA291C; --moving: #0082C8; --stopped: #8a8a82; --bunched: #DA291C; --red-ink: #b3211a; --wash: #f0efeb; }
+@media (prefers-color-scheme: dark) { :root { --bg: #161614; --panel: #1f1f1c; --line: #33332e; --fg: #ecebe6; --muted: #a3a29a; --axis: #55554f; --grid: #2d2d29;
+  --red: #ff5a4d; --moving: #4fb3e8; --stopped: #8f8e86; --bunched: #ff5a4d; --red-ink: #ff8a80; --wash: #26261f; } }
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; color: var(--fg); font: 15px/1.5 var(--font-sans); font-variant-numeric: tabular-nums; }
+a { color: inherit; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 clamp(12px, 3vw, 28px) 48px; }
+header.hero { padding: 26px 0 14px; }
+.kick { color: var(--muted); font-size: 13px; }
+h1 { font-family: var(--font-serif); font-weight: 400; font-size: clamp(26px, 4.4vw, 38px); line-height: 1.12; margin: 4px 0 8px; max-width: 30ch; }
+.herosub { margin: 0; max-width: 70ch; color: var(--muted); }
+h2 { font-family: var(--font-serif); font-weight: 400; font-size: 22px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 13px; margin: 0 0 12px; max-width: 80ch; }
+.bar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin: 14px 0; }
+.bar label { color: var(--muted); font-size: 13px; display: flex; gap: 8px; align-items: center; }
+select, button { font: inherit; }
+select { color: var(--fg); background: var(--panel); border: 1px solid var(--axis); border-radius: 8px; padding: 7px 9px; max-width: min(340px, 78vw); }
+.btn { background: var(--panel); color: var(--fg); border: 1px solid var(--axis); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+.btn:hover { background: var(--wash); }
+.btn[aria-pressed=true] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+:focus-visible { outline: 3px solid var(--moving); outline-offset: 2px; border-radius: 4px; }
+.live { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--red); }
+.pulse.off { background: var(--stopped); }
+@media (prefers-reduced-motion: no-preference) { .pulse:not(.off) { animation: pulse 2s infinite; } @keyframes pulse { 50% { opacity: .35; } } }
+.grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 880px) { .grid { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+#map { height: min(68vh, 620px); min-height: 380px; border-radius: 10px; border: 1px solid var(--line); background: var(--wash); z-index: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+.legend i { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--axis); }
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0 4px; }
+.tile { background: var(--wash); border-radius: 8px; padding: 10px 12px; }
+.tile .num { font-family: var(--font-serif); font-size: 26px; line-height: 1.15; }
+.tile .lab { color: var(--muted); font-size: 12.5px; }
+.verdict { margin: 10px 0 0; }
+.tabs { display: flex; gap: 6px; margin: 4px 0 10px; flex-wrap: wrap; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12.5px; padding: 6px 6px; border-bottom: 1px solid var(--axis); }
+td { padding: 7px 6px; border-bottom: 1px solid var(--line); }
+td.num, th.num { text-align: right; white-space: nowrap; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--wash); }
+tbody tr.sel { background: var(--wash); box-shadow: inset 3px 0 0 var(--red); }
+.chartbox { position: relative; }
+svg.chart { display: block; width: 100%; height: auto; overflow: visible; }
+.tip { position: absolute; pointer-events: none; background: var(--fg); color: var(--bg); border-radius: 7px; padding: 7px 9px; font-size: 12.5px; line-height: 1.35; white-space: nowrap; transform: translate(-50%, -100%); margin-top: -10px; opacity: 0; z-index: 5; }
+.tip.on { opacity: 1; }
+section { margin-top: 22px; }
+footer { color: var(--muted); font-size: 13.5px; margin-top: 26px; }
+footer li { margin: 4px 0; }
+.leaflet-container { font: inherit; background: var(--wash); }
+.leaflet-tooltip { font-size: 12.5px; }
+#err { color: var(--red-ink); font-size: 13px; }
+
+/* shared project bar, the same on every one of these tools */
+.apnav { display: flex; flex-wrap: wrap; gap: 4px 4px; align-items: center; padding: 8px clamp(12px, 3vw, 28px); font: 13.5px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #1f1e1b; color: #ecebe6; }
+.apnav b { font-weight: 600; margin-right: 10px; }
+.apnav a { color: #ecebe6; text-decoration: none; padding: 5px 9px; border-radius: 6px; }
+.apnav a:hover { background: #3a3934; }
+.apnav a[aria-current=page] { background: #ecebe6; color: #1f1e1b; }
+.apnav .sp { flex: 1; }
+</style>
+</head>
+<body>
+<nav class="apnav" aria-label="Projects by Amir Patel">
+  <b>Toronto data tools</b>
+  <a href="https://amirpatel32003.github.io/ttc-live/" aria-current="page">Live buses and streetcars</a>
+  <a href="https://amirpatel32003.github.io/ttc-delay-pipeline/">Subway delays</a>
+  <a href="https://amirpatel32003.github.io/ttc-delay-pipeline/renters/">Rent and delays</a>
+  <a href="https://amirpatel32003.github.io/canada-cost-of-living/">Cost of living</a>
+  <span class="sp"></span>
+  <a href="https://amirpatel32003.github.io/">Amir Patel's portfolio</a>
+</nav>
+<div class="wrap">
+  <header class="hero">
+    <div class="kick">TTC buses and streetcars, right now</div>
+    <h1 id="headline">Loading the live feed…</h1>
+    <p class="herosub">Every vehicle the TTC has in service, refreshed every 15 seconds. Pick a route to see how fast it is moving, whether its vehicles are running in bunches, and how that compares with its usual day.</p>
+  </header>
+
+  <div class="bar">
+    <label>Route <select id="route" aria-label="Route"></select></label>
+    <button class="btn" id="pause" type="button" aria-pressed="false">Pause updates</button>
+    <span class="live" role="status"><span class="pulse" id="pulse"></span><span id="status">Connecting</span></span>
+    <span id="err" role="alert"></span>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div id="map" role="application" aria-label="Map of TTC vehicles"></div>
+      <div class="legend" aria-hidden="true">
+        <span><i style="background:var(--moving)"></i>Moving</span>
+        <span><i style="background:var(--stopped)"></i>Stopped</span>
+        <span><i style="background:var(--bunched)"></i>Bunched: within 300 m of another vehicle on the same run, both moving</span>
+      </div>
+    </div>
+    <div class="panel" aria-live="polite">
+      <h2 id="sel-title">All routes</h2>
+      <p class="sub" id="sel-sub"></p>
+      <div class="tiles">
+        <div class="tile"><div class="num" id="t-veh">0</div><div class="lab">vehicles in service</div></div>
+        <div class="tile"><div class="num" id="t-speed">0</div><div class="lab">km/h, average of moving vehicles</div></div>
+        <div class="tile"><div class="num" id="t-stop">0</div><div class="lab">stopped right now</div></div>
+        <div class="tile"><div class="num" id="t-bunch">0</div><div class="lab">running bunched</div></div>
+      </div>
+      <p class="verdict" id="verdict"></p>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2 id="rank-title">Routes right now</h2>
+    <p class="sub">Routes with at least three vehicles out. Click a row to follow that route on the map.</p>
+    <div class="tabs" role="group" aria-label="Sort routes">
+      <button class="btn" type="button" data-sort="bunch" aria-pressed="true">Most bunched</button>
+      <button class="btn" type="button" data-sort="slow" aria-pressed="false">Slowest</button>
+      <button class="btn" type="button" data-sort="veh" aria-pressed="false">Most vehicles</button>
+    </div>
+    <div style="max-height:420px;overflow:auto">
+      <table id="rank"><thead><tr><th>Route</th><th class="num">Vehicles</th><th class="num">Moving speed</th><th class="num">Stopped</th><th class="num">Bunched</th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2 id="hist-title">A typical day</h2>
+    <p class="sub" id="hist-sub"></p>
+    <div class="chartbox"><svg class="chart" id="hist" role="img"></svg><div class="tip" id="hist-tip"></div></div>
+    <p class="sub" id="hist-note" style="margin:10px 0 0"></p>
+  </section>
+
+  <footer>
+    <h2>How to read this</h2>
+    <ul>
+      <li><b>Live map.</b> Your browser asks the TTC's public vehicle feed for positions every 15 seconds. Nothing on the map passes through a server of mine.</li>
+      <li><b>Speed</b> is the speed each vehicle reported at that instant, averaged over vehicles that were moving. It is lower than a timetable speed because it includes slowing for stops and lights.</li>
+      <li><b>Bunched</b> means two vehicles on the same route and direction within 300 metres of each other, both moving. Vehicles parked together at a terminal are not counted. Bunching usually means a long gap somewhere else on the route.</li>
+      <li><b>A typical day</b> comes from a collector that records the feed every 30 seconds for most of each hour and rolls it up by route and hour. It started in November 2026, so early figures rest on few days and will settle as more are added.</li>
+      <li>Subway trains are not in this feed. For those, see <a href="https://amirpatel32003.github.io/ttc-delay-pipeline/">the subway delay dashboard</a>.</li>
+    </ul>
+    <h2>Use the data</h2>
+    <ul>
+      <li><a href="data/route_hour.csv">route_hour.csv</a>: one row per route, date and hour with report counts, speed sums and bunching counts.</li>
+      <li><a href="data/history.json">history.json</a>: the hourly profile the chart uses.</li>
+    </ul>
+    <p id="built"></p>
+    <p>Built by <a href="https://amirpatel32003.github.io/">Amir Patel</a>. Code and tests on <a href="https://github.com/amirpatel32003/ttc-live">GitHub</a>. Vehicle data &copy; Toronto Transit Commission, from its public real-time feed. Map tiles &copy; OpenStreetMap contributors and CARTO. This is an independent project and is not affiliated with the TTC.</p>
+  </footer>
+</div>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script>
+"use strict";
+const FEED = "https://retro.umoiq.com/service/publicJSONFeed";
+const REFRESH_S = 15, BUNCH_M = 300;
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const pct = x => x == null || isNaN(x) ? "n/a" : Math.round(x * 100) + "%";
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const list = v => v == null ? [] : Array.isArray(v) ? v : [v];
+
+let vehicles = [], routeNames = {}, hist = null, selected = "", sortBy = "bunch", paused = false, lastOk = 0, timer = null, fitted = false;
+let map, layer, pathLayer, markers = new Map();
+
+function haversine(a, b) {
+  const R = 6371000, p1 = a.lat * Math.PI / 180, p2 = b.lat * Math.PI / 180, dl = (b.lon - a.lon) * Math.PI / 180;
+  const h = Math.sin((p2 - p1) / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+/* The same rule the collector uses: same route and direction, within 300 m, both moving. */
+function markBunched(vs) {
+  const runs = {};
+  vs.forEach(v => { v.bunched = false; if (v.dir && v.speed > 0) (runs[v.route + "|" + v.dir] = runs[v.route + "|" + v.dir] || []).push(v); });
+  Object.values(runs).forEach(g => { for (let i = 0; i < g.length; i++) for (let j = i + 1; j < g.length; j++) if (haversine(g[i], g[j]) <= BUNCH_M) g[i].bunched = g[j].bunched = true; });
+}
+function parse(body) {
+  const out = [];
+  list(body.vehicle).forEach(v => {
+    const lat = +v.lat, lon = +v.lon, age = +v.secsSinceReport;
+    if (!(lat > 43.55 && lat < 43.92 && lon > -79.70 && lon < -79.05) || !(age >= 0 && age <= 180) || !v.routeTag || !v.id) return;
+    out.push({ id: String(v.id), route: String(v.routeTag), dir: v.dirTag || "", lat, lon, speed: Math.max(0, Math.min(120, +v.speedKmHr || 0)), heading: +v.heading, age });
+  });
+  markBunched(out);
+  return out;
+}
+function summarise(vs) {
+  const onRun = vs.filter(v => v.dir), moving = onRun.filter(v => v.speed > 0);
+  return { n: onRun.length, speed: moving.length ? moving.reduce((a, v) => a + v.speed, 0) / moving.length : null,
+    stopped: onRun.length ? (onRun.length - moving.length) / onRun.length : null, bunchedN: onRun.filter(v => v.bunched).length,
+    bunched: moving.length ? onRun.filter(v => v.bunched).length / moving.length : null };
+}
+const routeLabel = r => routeNames[r] || r;
+const stateOf = v => v.bunched ? "bunched" : v.speed > 0 ? "moving" : "stopped";
+const stateText = { bunched: "Bunched", moving: "Moving", stopped: "Stopped" };
+
+function initMap() {
+  map = L.map("map", { preferCanvas: true, zoomControl: true, attributionControl: true }).setView([43.70, -79.40], 11);
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`, {
+    maxZoom: 18, subdomains: "abcd", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' }).addTo(map);
+  pathLayer = L.layerGroup().addTo(map);
+  layer = L.layerGroup().addTo(map);
+}
+function drawMap() {
+  const show = selected ? vehicles.filter(v => v.route === selected) : vehicles, seen = new Set(), cols = { moving: css("--moving"), stopped: css("--stopped"), bunched: css("--bunched") }, ring = css("--panel");
+  show.forEach(v => {
+    seen.add(v.id);
+    const st = stateOf(v), tip = `<b>${esc(routeLabel(v.route))}</b><br>Vehicle ${esc(v.id)} · ${stateText[st]}<br>${Math.round(v.speed)} km/h, reported ${v.age} s ago`;
+    let m = markers.get(v.id);
+    const style = { radius: selected ? 7 : st === "bunched" ? 5.5 : 4.5, color: ring, weight: selected ? 2 : 1, fillColor: cols[st], fillOpacity: st === "stopped" ? .75 : .95 };
+    if (!m) { m = L.circleMarker([v.lat, v.lon], style).bindTooltip(tip, { direction: "top" }).addTo(layer); m.on("click", () => select(v.route)); markers.set(v.id, m); }
+    else { m.setLatLng([v.lat, v.lon]); m.setStyle(style); m.setTooltipContent(tip); }
+    if (st === "bunched") m.bringToFront();
+  });
+  markers.forEach((m, id) => { if (!seen.has(id)) { layer.removeLayer(m); markers.delete(id); } });
+}
+async function drawPath() {
+  pathLayer.clearLayers();
+  if (!selected) { map.setView([43.70, -79.40], 11); return; }
+  const want = selected;
+  try {
+    const rc = await fetch(`${FEED}?command=routeConfig&a=ttc&r=${encodeURIComponent(want)}&terse`).then(r => r.json());
+    if (want !== selected || !rc.route) return;
+    const lines = list(rc.route.path).map(p => list(p.point).map(q => [+q.lat, +q.lon]));
+    L.polyline(lines, { color: css("--fg"), weight: 3, opacity: .45 }).addTo(pathLayer);
+    map.fitBounds([[+rc.route.latMin, +rc.route.lonMin], [+rc.route.latMax, +rc.route.lonMax]], { padding: [20, 20] });
+  } catch (e) {
+    const pts = vehicles.filter(v => v.route === want).map(v => [v.lat, v.lon]);
+    if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 14 });
+  }
+}
+
+function typicalNow(route) {
+  if (!hist) return null;
+  const now = new Date(), hour = +new Intl.DateTimeFormat("en-CA", { hour: "numeric", hour12: false, timeZone: "America/Toronto" }).format(now) % 24;
+  const wk = ["Sat", "Sun"].includes(new Intl.DateTimeFormat("en-CA", { weekday: "short", timeZone: "America/Toronto" }).format(now));
+  const series = route ? (hist.routes[route] || {}).hours : hist.city[wk ? "weekend" : "weekday"];
+  const row = (series || []).find(h => h.h === hour);
+  return row && row.reports >= 60 ? { ...row, hour } : null;
+}
+function renderPanel() {
+  const vs = selected ? vehicles.filter(v => v.route === selected) : vehicles, s = summarise(vs);
+  $("#sel-title").textContent = selected ? routeLabel(selected) : "All routes";
+  $("#sel-sub").textContent = selected ? "Showing only this route on the map." : "Pick a route above, or click a vehicle or a table row.";
+  $("#t-veh").textContent = s.n.toLocaleString("en-CA");
+  $("#t-speed").textContent = s.speed == null ? "n/a" : s.speed.toFixed(1);
+  $("#t-stop").textContent = pct(s.stopped);
+  $("#t-bunch").textContent = s.bunchedN.toLocaleString("en-CA");
+  const typ = typicalNow(selected); let v = "";
+  if (!s.n) v = selected ? "No vehicles from this route are reporting right now. It may not run at this hour." : "";
+  else if (typ && typ.speed != null && s.speed != null) {
+    const d = s.speed / typ.speed - 1, word = Math.abs(d) < 0.07 ? "about the same as" : d > 0 ? `${Math.round(d * 100)}% faster than` : `${Math.round(-d * 100)}% slower than`;
+    v = `Moving at ${s.speed.toFixed(1)} km/h, ${word} its usual ${typ.speed.toFixed(1)} km/h at this hour.`;
+    if (typ.bunched != null && s.bunched != null) v += ` ${pct(s.bunched)} of moving vehicles are bunched; the usual share at this hour is ${pct(typ.bunched)}.`;
+  } else if (s.bunchedN) v = `${s.bunchedN} of ${s.n} vehicles are running bunched right now.`;
+  else v = "No bunching right now.";
+  $("#verdict").textContent = v;
+  const all = summarise(vehicles);
+  $("#headline").textContent = vehicles.length ? `${all.n.toLocaleString("en-CA")} vehicles are out, and ${all.bunchedN} of them are running in bunches.` : "Waiting for the live feed.";
+}
+function renderRank() {
+  const by = {};
+  vehicles.forEach(v => { if (v.dir) (by[v.route] = by[v.route] || []).push(v); });
+  const rows = Object.entries(by).map(([r, vs]) => ({ r, ...summarise(vs) })).filter(x => x.n >= 3);
+  const key = { bunch: x => -(x.bunched || 0), slow: x => x.speed == null ? 999 : x.speed, veh: x => -x.n }[sortBy];
+  rows.sort((a, b) => key(a) - key(b) || b.n - a.n);
+  $("#rank tbody").innerHTML = rows.map(x => `<tr data-r="${esc(x.r)}" tabindex="0" class="${x.r === selected ? "sel" : ""}"><td>${esc(routeLabel(x.r))}</td><td class="num">${x.n}</td><td class="num">${x.speed == null ? "n/a" : x.speed.toFixed(1) + " km/h"}</td><td class="num">${pct(x.stopped)}</td><td class="num">${x.bunchedN ? x.bunchedN + " (" + pct(x.bunched) + ")" : "0"}</td></tr>`).join("") || `<tr><td colspan="5">No routes have three or more vehicles out right now.</td></tr>`;
+  document.querySelectorAll(".tabs .btn").forEach(b => b.setAttribute("aria-pressed", b.dataset.sort === sortBy));
+}
+function renderHistory() {
+  const el = $("#hist"), tip = $("#hist-tip");
+  if (!hist || !hist.coverage.reports) {
+    el.setAttribute("viewBox", "0 0 600 40"); el.innerHTML = "";
+    $("#hist-sub").textContent = "The collector has not published any history yet. It adds a new hour of data about once an hour."; $("#hist-note").textContent = ""; return;
+  }
+  const isRoute = selected && hist.routes[selected], series = isRoute ? hist.routes[selected].hours : hist.city.weekday.length ? hist.city.weekday : hist.city.weekend;
+  const pts = series.filter(h => h.speed != null && h.reports >= 60);
+  $("#hist-title").textContent = isRoute ? `A typical day on the ${routeLabel(selected)}` : "A typical weekday across the TTC";
+  $("#hist-sub").textContent = "Average speed of moving vehicles by hour of day, Toronto time. The dot is right now.";
+  const c = hist.coverage, since = new Date(c.first_report).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric", timeZone: "America/Toronto" });
+  $("#hist-note").textContent = `Based on ${c.reports.toLocaleString("en-CA")} vehicle reports over ${c.hours.toLocaleString("en-CA")} hours on ${c.days} day${c.days === 1 ? "" : "s"} since ${since}.` + (c.days < 7 ? " That is still a short record, so treat the shape as provisional." : "") + (selected && !isRoute ? " This route does not have enough history yet, so the chart shows all routes." : "");
+  if (pts.length < 2) { el.setAttribute("viewBox", "0 0 600 40"); el.innerHTML = `<text x="0" y="24" font-size="14" fill="${css("--muted")}">Not enough hours collected yet to draw a day. Check back tomorrow.</text>`; el.onmousemove = null; return; }
+  const W = Math.max(320, Math.round(el.parentNode.clientWidth)), H = W < 640 ? 240 : 290, L = 44, R = 18, T = 12, B = 30;
+  const live = summarise(selected ? vehicles.filter(v => v.route === selected) : vehicles), nowHour = typicalNow(selected) ? typicalNow(selected).hour : +new Intl.DateTimeFormat("en-CA", { hour: "numeric", hour12: false, timeZone: "America/Toronto" }).format(new Date()) % 24;
+  const vals = pts.map(p => p.speed).concat(live.speed != null ? [live.speed] : []);
+  let lo = Math.floor(Math.min(...vals) - 2), hi = Math.ceil(Math.max(...vals) + 2); lo = Math.max(0, lo);
+  const x = h => L + h / 23 * (W - L - R), y = v => T + (hi - v) / (hi - lo) * (H - T - B), step = (hi - lo) > 16 ? 5 : 2;
+  let svg = "";
+  for (let t = Math.ceil(lo / step) * step; t <= hi; t += step) svg += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" stroke="${css("--grid")}"/><text x="${L - 8}" y="${y(t) + 4}" text-anchor="end" font-size="12" fill="${css("--muted")}">${t}</text>`;
+  for (let h = 0; h <= 23; h += (W < 640 ? 6 : 3)) svg += `<text x="${x(h)}" y="${H - 8}" text-anchor="middle" font-size="12" fill="${css("--muted")}">${h === 0 ? "12 am" : h < 12 ? h + " am" : h === 12 ? "12 pm" : (h - 12) + " pm"}</text>`;
+  svg += `<text x="${L}" y="${T}" font-size="12" fill="${css("--muted")}">km/h</text><line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" stroke="${css("--axis")}"/>`;
+  let d = "", prev = null;
+  pts.forEach(p => { d += (prev != null && p.h - prev === 1 ? "L" : "M") + x(p.h).toFixed(1) + " " + y(p.speed).toFixed(1); prev = p.h; });
+  svg += `<path d="${d}" fill="none" stroke="${css("--moving")}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+  pts.forEach(p => svg += `<circle cx="${x(p.h)}" cy="${y(p.speed)}" r="3" fill="${css("--moving")}" stroke="${css("--panel")}" stroke-width="1.5"/>`);
+  if (live.speed != null) svg += `<circle cx="${x(nowHour)}" cy="${y(live.speed)}" r="6.5" fill="${css("--red")}" stroke="${css("--panel")}" stroke-width="2"/><text x="${x(nowHour) + (nowHour > 18 ? -11 : 11)}" y="${y(live.speed) + 4}" text-anchor="${nowHour > 18 ? "end" : "start"}" font-size="13" font-weight="600" fill="${css("--fg")}" stroke="${css("--panel")}" stroke-width="4" paint-order="stroke">Now ${live.speed.toFixed(1)}</text>`;
+  svg += `<line id="xh" y1="${T}" y2="${H - B}" stroke="${css("--muted")}" stroke-dasharray="3 3" visibility="hidden"/>`;
+  el.setAttribute("viewBox", `0 0 ${W} ${H}`); el.innerHTML = svg;
+  el.setAttribute("aria-label", `${$("#hist-title").textContent}. Typical speed ranges from ${Math.min(...pts.map(p => p.speed))} to ${Math.max(...pts.map(p => p.speed))} km/h.`);
+  const xh = el.querySelector("#xh");
+  el.onmousemove = e => {
+    const box = el.getBoundingClientRect(), k = box.width / W, h = Math.round(((e.clientX - box.left) / k - L) / (W - L - R) * 23), p = pts.find(q => q.h === h);
+    if (!p) { tip.classList.remove("on"); xh.setAttribute("visibility", "hidden"); return; }
+    xh.setAttribute("visibility", "visible"); xh.setAttribute("x1", x(h)); xh.setAttribute("x2", x(h));
+    tip.innerHTML = `<b>${h}:00 to ${h}:59</b><br>${p.speed.toFixed(1)} km/h moving speed<br>${pct(p.bunched)} bunched, ${pct(p.stopped)} stopped<br>${p.days} day${p.days === 1 ? "" : "s"} of data`;
+    tip.style.left = Math.min(box.width - 90, Math.max(90, x(h) * k)) + "px"; tip.style.top = (y(p.speed) * k) + "px"; tip.classList.add("on");
+  };
+  el.onmouseleave = () => { tip.classList.remove("on"); xh.setAttribute("visibility", "hidden"); };
+}
+function renderAll() { drawMap(); renderPanel(); renderRank(); renderHistory(); }
+
+function select(r) {
+  selected = r === selected ? "" : r;
+  $("#route").value = selected;
+  history_replace();
+  markers.forEach(m => layer.removeLayer(m)); markers.clear();
+  renderAll(); drawPath();
+}
+function history_replace() { try { window.history.replaceState(null, "", selected ? "#r=" + encodeURIComponent(selected) : location.pathname); } catch (e) {} }
+
+function fillRoutes() {
+  const live = new Set(vehicles.map(v => v.route)), tags = [...new Set([...Object.keys(routeNames), ...live])];
+  tags.sort((a, b) => (parseInt(a) || 9999) - (parseInt(b) || 9999) || a.localeCompare(b));
+  const cur = $("#route").value || selected;
+  $("#route").innerHTML = `<option value="">All routes</option>` + tags.map(t => `<option value="${esc(t)}">${esc(routeLabel(t))}${live.has(t) ? "" : " (not running now)"}</option>`).join("");
+  $("#route").value = cur;
+}
+async function tick() {
+  if (paused || document.hidden) return;
+  try {
+    const body = await fetch(`${FEED}?command=vehicleLocations&a=ttc&t=0`, { cache: "no-store" }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+    if (body.Error) throw new Error("feed busy");
+    vehicles = parse(body); lastOk = Date.now(); $("#err").textContent = "";
+    if (!fitted) { fillRoutes(); fitted = true; if (selected) drawPath(); }
+    renderAll();
+  } catch (e) { $("#err").textContent = lastOk ? "The TTC feed did not answer. Showing the last positions and trying again." : "The TTC feed is not answering right now. Trying again every 15 seconds."; }
+}
+function clock() {
+  const age = lastOk ? Math.round((Date.now() - lastOk) / 1000) : null;
+  $("#status").textContent = paused ? "Paused" : age == null ? "Connecting" : `Live · updated ${age} s ago`;
+  $("#pulse").classList.toggle("off", paused || age == null || age > 45);
+}
+
+(async function start() {
+  const m = location.hash.match(/r=([^&]+)/); if (m) selected = decodeURIComponent(m[1]);
+  initMap();
+  $("#route").onchange = e => { selected = e.target.value === selected ? selected : ""; select(e.target.value); };
+  $("#pause").onclick = e => { paused = !paused; e.target.setAttribute("aria-pressed", paused); e.target.textContent = paused ? "Resume updates" : "Pause updates"; clock(); if (!paused) tick(); };
+  document.querySelectorAll(".tabs .btn").forEach(b => b.onclick = () => { sortBy = b.dataset.sort; renderRank(); });
+  $("#rank tbody").onclick = e => { const tr = e.target.closest("tr[data-r]"); if (tr) { select(tr.dataset.r); $("#map").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" }); } };
+  $("#rank tbody").onkeydown = e => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-r]"); if (tr) select(tr.dataset.r); } };
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
+  let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderHistory, 150); });
+  fetch(`${FEED}?command=routeList&a=ttc`).then(r => r.json()).then(b => { list(b.route).forEach(r => routeNames[r.tag] = r.title); fillRoutes(); renderAll(); }).catch(() => {});
+  fetch("data/history.json", { cache: "no-store" }).then(r => r.ok ? r.json() : null).then(h => {
+    hist = h; renderAll();
+    if (h) $("#built").textContent = `History last rebuilt ${new Date(h.generated_at).toLocaleString("en-CA", { dateStyle: "long", timeStyle: "short", timeZone: "America/Toronto" })} Toronto time.`;
+  }).catch(() => {});
+  await tick();
+  timer = setInterval(tick, REFRESH_S * 1000); setInterval(clock, 1000); clock();
+})();
+</script>
+</body>
+</html>
