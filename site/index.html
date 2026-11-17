@@ -134,10 +134,11 @@ footer li { margin: 4px 0; }
     </div>
   </div>
 
-  <section class="panel" id="near-box" hidden>
+  <section class="panel" id="near-box">
     <h2>Near you right now</h2>
     <p class="sub" id="near-sub"></p>
-    <div style="max-height:340px;overflow:auto">
+    <p id="near-ask"><button class="btn" id="near-allow" type="button">Share my location</button></p>
+    <div id="near-wrap" style="max-height:340px;overflow:auto" hidden>
       <table id="near-table"><thead><tr><th>Route</th><th class="num">Distance</th><th>Doing</th><th>Direction</th></tr></thead><tbody></tbody></table>
     </div>
     <p class="sub" style="margin:10px 0 0">Your location stays in your browser. It is not sent to me or stored.</p>
@@ -332,8 +333,10 @@ async function renderGaps() {
 
 /* ---------- near me ---------- */
 function bearing(a, b) { const y = Math.sin((b.lon - a.lon) * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180), x = Math.cos(a.lat * Math.PI / 180) * Math.sin(b.lat * Math.PI / 180) - Math.sin(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.cos((b.lon - a.lon) * Math.PI / 180); return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360; }
+let nearMsg = "";
 function renderNear() {
-  const box = $("#near-box"); box.hidden = !me; if (!me) return;
+  $("#near-wrap").hidden = !me; $("#near-ask").hidden = !!me || watchId != null;
+  if (!me) { if (watchId == null && !nearMsg) $("#near-sub").textContent = "See which buses and streetcars are closest to you, how far away, and whether they are heading your way. Your browser will ask before sharing your location."; return; }
   const rows = vehicles.filter(v => v.dir).map(v => ({ v, d: haversine(me, v) })).filter(x => x.d <= 1000).sort((a, b) => a.d - b.d).slice(0, 25);
   $("#near-sub").textContent = rows.length ? `${rows.length} vehicle${rows.length === 1 ? "" : "s"} within one kilometre of you. Click one to follow its route.` : "No vehicles within one kilometre of you right now.";
   $("#near-table tbody").innerHTML = rows.map(({ v, d }) => {
@@ -347,21 +350,27 @@ function toggleNear() {
   if (me || watchId != null) {
     if (watchId != null) navigator.geolocation.clearWatch(watchId); watchId = null; me = null;
     if (meMarker) { map.removeLayer(meMarker); meMarker = null; }
-    btn.setAttribute("aria-pressed", "false"); btn.textContent = "Near me"; renderNear(); return;
+    nearMsg = ""; btn.setAttribute("aria-pressed", "false"); btn.textContent = "Near me"; renderNear(); return;
   }
-  if (!navigator.geolocation) { $("#err").textContent = "This browser cannot share a location."; return; }
+  if (!navigator.geolocation) { nearMsg = "x"; $("#near-sub").textContent = "This browser cannot share a location."; return; }
+  if (!window.isSecureContext) { nearMsg = "x"; $("#near-sub").textContent = "Location only works on a secure (https) page."; return; }
+  nearMsg = "x"; $("#near-sub").textContent = "Waiting for your browser to ask for permission. Tap Allow when it does."; $("#near-ask").hidden = true;
   btn.textContent = "Finding you…";
   let first = true;
   watchId = navigator.geolocation.watchPosition(pos => {
     me = { lat: pos.coords.latitude, lon: pos.coords.longitude };
     if (!meMarker) meMarker = L.circleMarker([me.lat, me.lon], { radius: 9, color: css("--fg"), weight: 3, fillColor: css("--panel"), fillOpacity: 1 }).bindTooltip("You are here").addTo(map);
     else meMarker.setLatLng([me.lat, me.lon]);
-    btn.setAttribute("aria-pressed", "true"); btn.textContent = "Stop using my location"; $("#err").textContent = "";
+    btn.setAttribute("aria-pressed", "true"); btn.textContent = "Stop using my location"; nearMsg = "";
     if (first) { first = false; if (!selected) map.setView([me.lat, me.lon], 15); }
     renderNear();
-  }, () => {
-    watchId = null; btn.setAttribute("aria-pressed", "false"); btn.textContent = "Near me";
-    $("#err").textContent = "Your location was not shared, so Near me is off. You can allow it in the browser's site settings.";
+  }, err => {
+    if (watchId != null) navigator.geolocation.clearWatch(watchId);
+    watchId = null; btn.setAttribute("aria-pressed", "false"); btn.textContent = "Near me"; nearMsg = "x";
+    $("#near-sub").textContent = err && err.code === 1 ? "Location is blocked for this site, so Near me is off. To turn it on, allow location for this site in your browser or phone settings, then tap Share my location again."
+      : err && err.code === 3 ? "Your phone took too long to find you. Move near a window or check that location is on, then try again."
+      : "Your location could not be found. Check that location is turned on, then try again.";
+    $("#near-ask").hidden = false; $("#near-allow").textContent = "Try again";
   }, { enableHighAccuracy: true, maximumAge: 15000, timeout: 15000 });
 }
 
@@ -498,6 +507,8 @@ function clock() {
   initMap();
   $("#route").onchange = e => { selected = e.target.value === selected ? selected : ""; select(e.target.value); };
   $("#near").onclick = toggleNear;
+  $("#near-allow").onclick = toggleNear;
+  if (navigator.permissions && navigator.permissions.query) navigator.permissions.query({ name: "geolocation" }).then(r => { if (r.state === "granted" && !me && watchId == null) toggleNear(); }).catch(() => {});
   $("#near-table tbody").onclick = e => { const tr = e.target.closest("tr[data-r]"); if (tr && tr.dataset.r !== selected) select(tr.dataset.r); };
   $("#near-table tbody").onkeydown = e => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-r]"); if (tr && tr.dataset.r !== selected) select(tr.dataset.r); } };
   $("#pause").onclick = e => { paused = !paused; e.target.setAttribute("aria-pressed", paused); e.target.textContent = paused ? "Resume updates" : "Pause updates"; clock(); if (!paused) tick(); };
