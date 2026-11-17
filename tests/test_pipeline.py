@@ -100,4 +100,5 @@ def test_history_reports_speed_of_moving_vehicles_and_bunching_share(run):
     assert weekday[17]["speed"] == pytest.approx((6 * 18 + 2 * 12) / 8, abs=0.1)
     assert weekday[17]["bunched"] == pytest.approx(2 / 8, abs=0.001)
     assert hist["coverage"]["days"] == 1
+    assert hist["coverage"]["first_report"].startswith("2026-11-16T21:5")
     json.dumps(hist)

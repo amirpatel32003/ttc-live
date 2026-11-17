@@ -80,12 +80,19 @@ def update_aggregate(raw_dir: Path, agg_path: Path) -> int:
     return n
 
 
+def _iso(epoch_seconds) -> str | None:
+    """Timestamps leave DuckDB as epoch seconds so nothing depends on an optional time zone package."""
+    if epoch_seconds is None:
+        return None
+    return datetime.fromtimestamp(float(epoch_seconds), tz=timezone.utc).isoformat(timespec="seconds")
+
+
 def build_history(agg_path: Path) -> dict:
     """What the page needs: typical speed and bunching by hour of day, per route and citywide."""
     con = duckdb.connect()
     con.execute(f"create table a as select *, dayofweek(cast(local_date as date)) in (0, 6) as weekend from read_parquet('{agg_path.as_posix()}')")
     cover = con.execute(
-        "select min(first_report), max(last_report), count(distinct local_date), sum(reports), count(distinct local_date || '-' || local_hour) from a"
+        "select epoch(min(first_report)), epoch(max(last_report)), count(distinct local_date), sum(reports), count(distinct local_date || '-' || local_hour) from a"
     ).fetchone()
 
     def by_hour(where: str, params: list) -> list:
@@ -110,7 +117,7 @@ def build_history(agg_path: Path) -> dict:
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "coverage": {
-            "first_report": cover[0].isoformat() if cover[0] else None, "last_report": cover[1].isoformat() if cover[1] else None,
+            "first_report": _iso(cover[0]), "last_report": _iso(cover[1]),
             "days": int(cover[2] or 0), "reports": int(cover[3] or 0), "hours": int(cover[4] or 0),
         },
         "city": {"weekday": by_hour("not weekend", []), "weekend": by_hour("weekend", [])},
